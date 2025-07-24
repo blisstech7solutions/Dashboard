@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en" class="transition duration-300">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Dual App Contact Messages</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            primary: '#2563EB',
+          }
+        }
+      }
+    };
+  </script>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/9.6.11/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.11/firebase-firestore-compat.js"></script>
+</head>
+
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-200 min-h-screen p-4 transition duration-300">
+
+  <!-- Header -->
+  <div class="flex flex-col sm:flex-row justify-between items-center gap-4 mb-6">
+    <h1 class="text-2xl sm:text-3xl font-bold text-blue-700 dark:text-blue-300">📬 Contact Messages</h1>
+    <button onclick="toggleTheme()" class="bg-gray-700 text-white px-4 py-2 rounded hover:bg-gray-800">
+      Toggle Theme
+    </button>
+  </div>
+
+  <!-- Tabs -->
+  <div class="mb-4 flex gap-4 flex-wrap">
+    <button onclick="switchApp('gym')" class="tab-btn bg-primary text-white px-4 py-2 rounded">Gym</button>
+    <button onclick="switchApp('company')" class="tab-btn bg-gray-300 dark:bg-gray-700 text-black dark:text-white px-4 py-2 rounded">Company</button>
+    <span class="ml-auto bg-red-600 text-white text-xs px-3 py-1 rounded-full" id="unread-count">0</span>
+  </div>
+
+  <!-- Search -->
+  <input type="text" id="searchBox" placeholder="Search by name, email, or subject..."
+    class="w-full mb-4 p-3 rounded border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800" />
+
+  <!-- Messages -->
+  <div id="messages-container" class="grid grid-cols-1 sm:grid-cols-2 gap-4"></div>
+
+  <!-- Pagination -->
+  <div class="mt-6 flex justify-center gap-3 flex-wrap">
+    <button id="prevBtn" class="bg-gray-600 text-white px-4 py-2 rounded disabled:opacity-50">Prev</button>
+    <button id="nextBtn" class="bg-gray-600 text-white px-4 py-2 rounded disabled:opacity-50">Next</button>
+  </div>
+
+<script>
+  const config = {
+    gym: {
+      apiKey: "AIzaSyCY5-w3jLyC9iXN8Kh26wGIVia1zGuGwyk",
+      authDomain: "gym-management-50b12.firebaseapp.com",
+      projectId: "gym-management-50b12"
+    },
+    company: {
+      apiKey: "AIzaSyBYV3M4Wo6bamjNTt5TK6LT_W8NR0ody48",
+      authDomain: "fir-application-349d3.firebaseapp.com",
+      projectId: "fir-application-349d3"
+    }
+  };
+
+  const app1 = firebase.initializeApp(config.gym, 'gym');
+  const app2 = firebase.initializeApp(config.company, 'company');
+
+  const dbs = {
+    gym: firebase.firestore(app1),
+    company: firebase.firestore(app2)
+  };
+
+  const messagesContainer = document.getElementById("messages-container");
+  const unreadCountEl = document.getElementById("unread-count");
+  const searchBox = document.getElementById("searchBox");
+
+  let messages = [];
+  let currentApp = 'gym';
+  let currentPage = 1;
+  const itemsPerPage = 4;
+
+  function switchApp(appName) {
+    currentApp = appName;
+    currentPage = 1;
+    loadMessages();
+    document.querySelectorAll(".tab-btn").forEach(btn => btn.classList.remove("bg-primary", "text-white"));
+    event.target.classList.add("bg-primary", "text-white");
+  }
+
+  function loadMessages() {
+    const db = dbs[currentApp];
+    const collectionName = currentApp === 'gym' ? 'contactMessages' : 'messages';
+
+    db.collection(collectionName).orderBy('timestamp', 'desc').onSnapshot(snapshot => {
+      messages = snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }));
+      applySearchAndRender();
+    });
+  }
+
+  function renderMessages(filtered) {
+    const start = (currentPage - 1) * itemsPerPage;
+    const paginated = filtered.slice(start, start + itemsPerPage);
+    messagesContainer.innerHTML = '';
+
+    paginated.forEach(({ id, data }) => {
+      const isRead = data.read === true;
+      const card = document.createElement("div");
+      card.className = `bg-white dark:bg-gray-800 p-4 rounded-xl shadow border border-gray-200 dark:border-gray-700`;
+
+      const fallbackSubject = data.subject || (data.message?.substring(0, 50) + '...') || 'No subject';
+
+      card.innerHTML = `
+        <div class="flex justify-between items-center cursor-pointer" onclick="toggleExpand('${id}')">
+          <div>
+            <h2 class="text-lg font-semibold text-blue-700 dark:text-blue-300">${fallbackSubject}</h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400">${data.email}</p>
+          </div>
+          <div>
+            <span class="text-xs px-2 py-1 rounded-full ${
+              isRead ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-700'
+            }">${isRead ? 'Read' : 'Unread'}</span>
+          </div>
+        </div>
+
+        <div id="expand-${id}" class="hidden mt-4 border-t pt-4 text-sm space-y-2 text-gray-700 dark:text-gray-200">
+          <p><strong>Name:</strong> ${data.name || 'N/A'}</p>
+          <p><strong>Message:</strong> ${data.message || 'No message'}</p>
+          <p><strong>Time:</strong> ${data.timestamp ? new Date(data.timestamp).toLocaleString() : 'N/A'}</p>
+          ${
+            !isRead
+              ? `<button onclick="markAsRead('${id}')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">
+                  Mark as Read
+                </button>`
+              : `<span class="text-green-500 font-medium text-sm">✅ Marked as Read</span>`
+          }
+        </div>`;
+      messagesContainer.appendChild(card);
+    });
+
+    document.getElementById("prevBtn").disabled = currentPage === 1;
+    document.getElementById("nextBtn").disabled = start + itemsPerPage >= filtered.length;
+  }
+
+  function updateUnreadCount(data) {
+    const unread = data.filter(msg => !msg.data.read);
+    unreadCountEl.textContent = unread.length;
+  }
+
+  function applySearchAndRender() {
+    const query = searchBox.value.toLowerCase();
+    const filtered = messages.filter(({ data }) =>
+      (data.name || '').toLowerCase().includes(query) ||
+      (data.email || '').toLowerCase().includes(query) ||
+      (data.subject || '').toLowerCase().includes(query)
+    );
+    renderMessages(filtered);
+    updateUnreadCount(filtered);
+  }
+
+  function markAsRead(docId) {
+    const db = dbs[currentApp];
+    const collectionName = currentApp === 'gym' ? 'contactMessages' : 'messages';
+    db.collection(collectionName).doc(docId).update({ read: true });
+  }
+
+  function toggleExpand(id) {
+    const section = document.getElementById(`expand-${id}`);
+    section.classList.toggle("hidden");
+  }
+
+  document.getElementById("prevBtn").addEventListener("click", () => {
+    if (currentPage > 1) {
+      currentPage--;
+      applySearchAndRender();
+    }
+  });
+
+  document.getElementById("nextBtn").addEventListener("click", () => {
+    const maxPage = Math.ceil(messages.length / itemsPerPage);
+    if (currentPage < maxPage) {
+      currentPage++;
+      applySearchAndRender();
+    }
+  });
+
+  searchBox.addEventListener("input", () => {
+    currentPage = 1;
+    applySearchAndRender();
+  });
+
+  function toggleTheme() {
+    document.documentElement.classList.toggle("dark");
+  }
+
+  loadMessages(); // load gym by default
+</script>
+
+</body>
+</html>
