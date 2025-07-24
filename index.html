@@ -37,8 +37,8 @@
 
   <!-- Tabs -->
   <div class="mb-4 flex gap-4 flex-wrap">
-    <button onclick="switchApp('gym')" class="tab-btn bg-primary text-white px-4 py-2 rounded">Gym</button>
-    <button onclick="switchApp('company')" class="tab-btn bg-gray-300 dark:bg-gray-700 text-black dark:text-white px-4 py-2 rounded">Company</button>
+    <button id="tab-gym" onclick="switchApp('gym', event)" class="tab-btn bg-primary text-white px-4 py-2 rounded">Gym</button>
+    <button id="tab-company" onclick="switchApp('company', event)" class="tab-btn bg-gray-300 dark:bg-gray-700 text-black dark:text-white px-4 py-2 rounded">Company</button>
     <span class="ml-auto bg-red-600 text-white text-xs px-3 py-1 rounded-full" id="unread-count">0</span>
   </div>
 
@@ -86,12 +86,19 @@
   let currentPage = 1;
   const itemsPerPage = 4;
 
-  function switchApp(appName) {
+  function switchApp(appName, event) {
     currentApp = appName;
     currentPage = 1;
     loadMessages();
-    document.querySelectorAll(".tab-btn").forEach(btn => btn.classList.remove("bg-primary", "text-white"));
-    event.target.classList.add("bg-primary", "text-white");
+    // Update tab button styles
+    document.querySelectorAll(".tab-btn").forEach(btn => {
+      btn.classList.remove("bg-primary", "text-white");
+      if (btn.id === "tab-" + appName) {
+        btn.classList.add("bg-primary", "text-white");
+      } else {
+        btn.classList.remove("bg-primary", "text-white");
+      }
+    });
   }
 
   function loadMessages() {
@@ -100,6 +107,7 @@
 
     db.collection(collectionName).orderBy('timestamp', 'desc').onSnapshot(snapshot => {
       messages = snapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }));
+      currentPage = 1;  // Reset to page 1 on reload
       applySearchAndRender();
     });
   }
@@ -109,18 +117,26 @@
     const paginated = filtered.slice(start, start + itemsPerPage);
     messagesContainer.innerHTML = '';
 
+    if (paginated.length === 0) {
+      messagesContainer.innerHTML = `<p class="col-span-full text-center text-gray-500 dark:text-gray-400">No messages found.</p>`;
+      unreadCountEl.textContent = 0;
+      document.getElementById("prevBtn").disabled = true;
+      document.getElementById("nextBtn").disabled = true;
+      return;
+    }
+
     paginated.forEach(({ id, data }) => {
       const isRead = data.read === true;
       const card = document.createElement("div");
-      card.className = `bg-white dark:bg-gray-800 p-4 rounded-xl shadow border border-gray-200 dark:border-gray-700`;
+      card.className = `bg-white dark:bg-gray-800 p-4 rounded-xl shadow border border-gray-200 dark:border-gray-700 relative`;
 
-      const fallbackSubject = data.subject || (data.message?.substring(0, 50) + '...') || 'No subject';
+      const fallbackSubject = data.subject || (data.message ? data.message.substring(0, 50) + '...' : 'No subject');
 
       card.innerHTML = `
         <div class="flex justify-between items-center cursor-pointer" onclick="toggleExpand('${id}')">
           <div>
-            <h2 class="text-lg font-semibold text-blue-700 dark:text-blue-300">${fallbackSubject}</h2>
-            <p class="text-sm text-gray-500 dark:text-gray-400">${data.email}</p>
+            <h2 class="text-lg font-semibold text-blue-700 dark:text-blue-300">${escapeHtml(fallbackSubject)}</h2>
+            <p class="text-sm text-gray-500 dark:text-gray-400">${escapeHtml(data.email || '')}</p>
           </div>
           <div>
             <span class="text-xs px-2 py-1 rounded-full ${
@@ -130,22 +146,60 @@
         </div>
 
         <div id="expand-${id}" class="hidden mt-4 border-t pt-4 text-sm space-y-2 text-gray-700 dark:text-gray-200">
-          <p><strong>Name:</strong> ${data.name || 'N/A'}</p>
-          <p><strong>Message:</strong> ${data.message || 'No message'}</p>
-          <p><strong>Time:</strong> ${data.timestamp ? new Date(data.timestamp).toLocaleString() : 'N/A'}</p>
+          <p><strong>Name:</strong> ${escapeHtml(data.name || 'N/A')}</p>
+          <p><strong>Message:</strong> ${escapeHtml(data.message || 'No message')}</p>
+          <p><strong>Time:</strong> ${data.timestamp ? formatTimestamp(data.timestamp) : 'N/A'}</p>
           ${
             !isRead
-              ? `<button onclick="markAsRead('${id}')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">
+              ? `<button onclick="event.stopPropagation(); markAsRead('${id}')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">
                   Mark as Read
                 </button>`
               : `<span class="text-green-500 font-medium text-sm">✅ Marked as Read</span>`
           }
-        </div>`;
+        </div>
+
+        <button
+          onclick="event.stopPropagation(); deleteMessage('${id}')"
+          class="absolute top-3 right-3 text-red-600 hover:text-red-800"
+          title="Delete message"
+          aria-label="Delete message"
+        >
+          🗑️
+        </button>
+      `;
       messagesContainer.appendChild(card);
     });
 
     document.getElementById("prevBtn").disabled = currentPage === 1;
     document.getElementById("nextBtn").disabled = start + itemsPerPage >= filtered.length;
+
+    updateUnreadCount(filtered);
+  }
+
+  // Utility: escape HTML for safety
+  function escapeHtml(text) {
+    if (!text) return '';
+    return text.replace(/[&<>"']/g, function (m) {
+      return {'&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;'}[m];
+    });
+  }
+
+  // Format timestamp: Firestore timestamp may be a Firebase Timestamp object or a Date string
+  function formatTimestamp(ts) {
+    let date;
+    if (ts.toDate) {
+      date = ts.toDate();
+    } else if (ts instanceof Date) {
+      date = ts;
+    } else if (typeof ts === 'number') {
+      date = new Date(ts);
+    } else if (ts.seconds) {
+      // Firestore Timestamp like object
+      date = new Date(ts.seconds * 1000);
+    } else {
+      date = new Date(ts);
+    }
+    return date.toLocaleString();
   }
 
   function updateUnreadCount(data) {
@@ -158,21 +212,39 @@
     const filtered = messages.filter(({ data }) =>
       (data.name || '').toLowerCase().includes(query) ||
       (data.email || '').toLowerCase().includes(query) ||
-      (data.subject || '').toLowerCase().includes(query)
+      (data.subject || '').toLowerCase().includes(query) ||
+      (data.message || '').toLowerCase().includes(query)
     );
     renderMessages(filtered);
-    updateUnreadCount(filtered);
   }
 
   function markAsRead(docId) {
     const db = dbs[currentApp];
     const collectionName = currentApp === 'gym' ? 'contactMessages' : 'messages';
-    db.collection(collectionName).doc(docId).update({ read: true });
+    db.collection(collectionName).doc(docId).update({ read: true })
+      .catch(err => alert("Error marking as read: " + err.message));
+  }
+
+  function deleteMessage(docId) {
+    if (!confirm("Are you sure you want to delete this message?")) return;
+
+    const db = dbs[currentApp];
+    const collectionName = currentApp === 'gym' ? 'contactMessages' : 'messages';
+
+    db.collection(collectionName).doc(docId).delete()
+      .then(() => {
+        alert("Message deleted successfully.");
+      })
+      .catch(err => {
+        alert("Error deleting message: " + err.message);
+      });
   }
 
   function toggleExpand(id) {
     const section = document.getElementById(`expand-${id}`);
-    section.classList.toggle("hidden");
+    if (section) {
+      section.classList.toggle("hidden");
+    }
   }
 
   document.getElementById("prevBtn").addEventListener("click", () => {
@@ -199,7 +271,9 @@
     document.documentElement.classList.toggle("dark");
   }
 
-  loadMessages(); // load gym by default
+  // Initial setup: highlight gym tab and load messages
+  document.getElementById("tab-gym").classList.add("bg-primary", "text-white");
+  loadMessages();
 </script>
 
 </body>
