@@ -327,36 +327,85 @@
       }
     }
 
-    async function loadUsers(status) {
-      let query = dbs.hospital.collection("users");
-      if (status !== 'all' && status !== 'provider' && status !== 'physician') {
-        query = query.where("status", "==", status);
-      } else if (status === 'provider' || status === 'physician') {
-        query = query.where("role", "==", status);
-      }
-      const snap = await query.orderBy("createdAt", "desc").get();
-      let html = "";
-      snap.forEach(doc => {
-        const u = doc.data();
-        html += `<div class="mb-3 border-bottom pb-2">
-          <h5>${u.name || u.displayName || 'No Name'}</h5>
-          <p>Email: ${u.email}</p>
-          <p>Role: ${u.role}</p>
-          <p>Status: ${u.status}</p>
-          <small>Created: ${u.createdAt?.toDate().toLocaleString() || 'N/A'}</small><br>
-          ${u.status === 'pending' ? `
-            <button class="btn btn-sm btn-success me-2" onclick="approveUser('${doc.id}')">Approve</button>
-            <button class="btn btn-sm btn-danger me-2" onclick="rejectUser('${doc.id}')">Reject</button>` : ''}
-          <button class="btn btn-sm btn-outline-danger" onclick="deleteUser('${doc.id}')">Delete</button>
-        </div>`;
-      });
-      document.getElementById("userList").innerHTML = html || "<i>No users found.</i>";
-    }
+let unsubscribeUsers = null;
 
-    async function approveUser(id) {
-      await dbs.hospital.collection("users").doc(id).update({ status: "approved" });
-      await loadUsers('pending');
-    }
+function loadUsers(filter) {
+  if (unsubscribeUsers) unsubscribeUsers();
+
+  let query = dbs.hospital.collection("users");
+
+  if (filter === 'approved') {
+    query = query.where("isApproved", "==", true);
+  } else if (filter === 'pending') {
+    query = query.where("isApproved", "==", false);
+  } else if (filter === 'provider' || filter === 'physician') {
+    query = query.where("role", "==", filter);
+  }
+
+  unsubscribeUsers = query.orderBy("createdAt", "desc")
+    .onSnapshot(snapshot => {
+      let html = "";
+
+      snapshot.forEach(doc => {
+        const u = doc.data();
+        html += `
+          <div class="mb-3 border-bottom pb-2">
+            <h5>${u.name || 'No Name'}</h5>
+            <p>Email: ${u.email}</p>
+            <p>Role: ${u.role}</p>
+            <p>Status: ${u.isApproved ? 'approved' : 'pending'}</p>
+
+            ${!u.isApproved ? `
+              <button class="btn btn-sm btn-success me-2"
+                onclick="approveUser('${doc.id}')">Approve</button>
+            ` : ''}
+
+            <button class="btn btn-sm btn-outline-danger"
+              onclick="deleteUser('${doc.id}')">Delete</button>
+          </div>
+        `;
+      });
+
+      document.getElementById("userList").innerHTML =
+        html || "<i>No users found.</i>";
+    });
+}
+
+async function approveUser(id) {
+  await dbs.hospital.collection("users").doc(id).update({
+    isApproved: true
+  });
+
+  document.getElementById("userList").innerHTML = "Refreshing...";
+  await loadUsers('pending');
+}
+
+async function loadUserCounts() {
+  const snap = await dbs.hospital.collection("users").get();
+snap.forEach(doc => {
+  if (doc.data().isApproved === undefined) {
+    doc.ref.update({ isApproved: false });
+  }
+});
+
+  let total = 0, approved = 0, pending = 0;
+
+  snap.forEach(doc => {
+    total++;
+    doc.data().isApproved ? approved++ : pending++;
+  });
+
+  document.getElementById("totalUsers").innerText = total;
+  document.getElementById("approvedUsers").innerText = approved;
+  document.getElementById("pendingUsers").innerText = pending;
+}
+
+async function rejectUser(id) {
+  await dbs.hospital.collection("users").doc(id).update({
+    isApproved: false
+  });
+  loadUsers('pending');
+}
 
     async function rejectUser(id) {
       await dbs.hospital.collection("users").doc(id).update({ status: "rejected" });
